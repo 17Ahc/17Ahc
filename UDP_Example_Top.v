@@ -61,14 +61,8 @@ module UDP_Example_Top(
       output              cam_pwdn,     
       output              cam_scl,      
       inout               cam_sda , 
-      input               key4_btn,
-      input           wire camser_fifo_re,
-      input                 Sdr_busy,
-      input                 video_clk,
-      input              video_read_en,
-      input      wire [7:0] cam_byte,
-      input             cam_byte_valid,
-      input               Sdr_init_ref_vld
+      input               key4_btn
+      
 );
 parameter  DEVICE             = "EG4";//"PH1","EG4"
 parameter  LOCAL_UDP_PORT_NUM = 16'h0001;       
@@ -194,6 +188,13 @@ wire sd_rd_val_en ,sd_init_done/* synthesis syn_keep=1 */;
 wire [15:0] sd_rd_val_data;
 wire sdr_wr_en;//synthesis keep 
 wire [31:0]sdr_wr_data;//synthesis keep 
+wire camser_fifo_re;
+wire Sdr_busy;
+wire video_clk;
+wire video_read_en;
+wire [7:0] cam_byte;
+wire cam_byte_valid;
+wire Sdr_init_ref_vld;
 //SD卡顶层控制模坄1�7
 sd_ctrl_top t1_sd_ctrl_top(
     .clk_ref                (clk_50m),
@@ -238,7 +239,7 @@ sd_ctrl_top t1_sd_ctrl_top(
     assign   sd_reset_rd_flag =( {key1_d0,key1_d1}  ==   2'b10 )   ?  1'b0 :1'b1;    
 
                                                       
-wire Sdr_init_done/* synthesis syn_keep=1 */;
+wire Sdr_init_done /* synthesis syn_keep=1 */;
 //读取SD卡图牄1�7
 wire full_flag_sdr;
 sd_read_photo t2_sd_read_photo(
@@ -296,9 +297,6 @@ reg key4_sync0;
 reg key4_sync1;
 reg key4_prev;
 reg key4_reg;
-// 状emachine 简单控制（idle / send）
-localparam IDLE = 1'b0, SEND = 1'b1;
-reg state;
 //always @(posedge ext_mem_clk or negedge rst_n) begin
 //    if (!rst_n) begin
 //        key4_sync0 <= 1'b1;
@@ -430,9 +428,7 @@ parameter  TOTAL_V_PIXEL = V_CMOS_DISP + 12'd504;
  reg [15:0] cam_frame_len_r;
  reg        cam_frame_done_r;
  reg [15:0] cam_frame_len_count;
- wire cam_frame_end_pulse; // TODO: 将写侧帧结束脉冲同步刄1�7 clk_udp 并连接到此信叄1�7
- 
- assign cam_frame_end_pulse = 1'b0; // 默认不触发；请用同步脉冲替换
+ wire cam_frame_end_pulse;
 // 把 sel_cam 指向 key4_reg（顶层内部信号）
 wire sel_cam;
 assign sel_cam = 1'b1;
@@ -455,6 +451,60 @@ assign sel_cam = 1'b1;
      .app_tx_data_valid  (app_tx_data_valid_src),
      .app_tx_data_length (app_tx_data_length_src),
      .app_tx_data_done   (app_tx_data_done_src)
+ );
+wire [8:0] sdr2udp_rdusedw;
+wire [23:0] Sdr_rd_dout ;
+wire [11:0] udp_wrusedw;    
+wire rst_n ;    
+wire cam_sdr_read_req;
+assign cam_sdr_read_req = camser_fifo_re  ;
+wire  sdr2udp_re;
+assign sdr2udp_dout    = {8'h00, Sdr_rd_dout};     // 24->32 拓宽
+assign sdr2udp_rdusedw = udp_wrusedw[8:0]; 
+wire reset_n_udp;
+wire reset_n_memclk;
+assign reset_n_memclk = rst_n & Sdr_init_done;
+assign reset_n_udp    = rst_n & Sdr_init_done;  
+assign clk_udp= udp_clk;
+pulse_toggle_sync u_cam_req_sync (
+    .src_clk  (clk_udp),
+    .src_rst_n(reset_n_udp),
+    .src_pulse(cam_sdr_read_req),
+    .dst_clk  (ext_mem_clk),           // frame_read_write / mem domain clock
+    .dst_rst_n(reset_n_memclk),
+    .dst_pulse(ext_rd_req_memclk)
+);
+pulse_toggle_sync u_frame_end_sync (
+    .src_clk  (ext_mem_clk),
+    .src_rst_n(reset_n_memclk),
+    .src_pulse(wr_done),
+    .dst_clk  (clk_udp),
+    .dst_rst_n(reset_n_udp),
+    .dst_pulse(cam_frame_end_pulse)
+);
+  cam_to_udp_serializer  t4(
+     .clk            (clk_udp),
+     .rst_n          (reset_n_udp),
+     .fifo_rd_usedw  (sdr2udp_rdusedw),
+     .fifo_dout      (sdr2udp_dout),
+     .fifo_re        (camser_fifo_re),
+     .cam_data       (camser_word),
+     .cam_data_valid (camser_word_valid)
+ );
+ // ========== 32-bit -> 8-bit 字节序列匄1�7 ==========
+ wire [7:0] cam_byte;
+ wire       cam_byte_valid;
+ wire       cam_byte_last;
+ wire [31:0] camser_word;
+ wire        camser_word_valid;
+ cam_word_to_bytes t5 (
+     .clk            (clk_udp),
+     .rst_n          (reset_n_udp),
+     .in_word        (camser_word),
+     .in_word_valid  (camser_word_valid),
+     .out_byte       (cam_byte),
+     .out_byte_valid (cam_byte_valid),
+     .out_word_last  (cam_byte_last)
  );
 always @(posedge clk_udp or negedge rst_n_v2) begin
     if (!rst_n_v2) begin
