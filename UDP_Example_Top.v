@@ -61,7 +61,14 @@ module UDP_Example_Top(
       output              cam_pwdn,     
       output              cam_scl,      
       inout               cam_sda , 
-      input               key4_btn
+      input               key4_btn,
+      input           wire camser_fifo_re,
+      input                 Sdr_busy,
+      input                 video_clk,
+      input              video_read_en,
+      input      wire [7:0] cam_byte,
+      input             cam_byte_valid,
+      input               Sdr_init_ref_vld
 );
 parameter  DEVICE             = "EG4";//"PH1","EG4"
 parameter  LOCAL_UDP_PORT_NUM = 16'h0001;       
@@ -313,7 +320,7 @@ reg state;
 //end
 //
 
- parameter  V_CMOS_DISP = 11'd768;                  //CMOS分辨率--行
+parameter  V_CMOS_DISP = 11'd768;                  //CMOS分辨率--行
 parameter  H_CMOS_DISP = 11'd1024;                 //CMOS分辨率--列	
 parameter  TOTAL_H_PIXEL = H_CMOS_DISP + 12'd1216; //CMOS分辨率--行
 parameter  TOTAL_V_PIXEL = V_CMOS_DISP + 12'd504;    
@@ -403,8 +410,6 @@ parameter  TOTAL_V_PIXEL = V_CMOS_DISP + 12'd504;
  	.write_data                 (cam_write_data       )
  );
  
- 
- wire [8:0] sdr2udp_wrusedw;
  wire [8:0] sdr2udp_rdusedw;
  wire [31:0] sdr2udp_dout;
  wire  sdr2udp_re;
@@ -413,44 +418,12 @@ parameter  TOTAL_V_PIXEL = V_CMOS_DISP + 12'd504;
  assign sdr2udp_dout    = {8'h00, Sdr_rd_dout};     // 24->32 拓宽
  assign sdr2udp_rdusedw = udp_wrusedw[8:0];         // 佄1�79位作丄1�7 usedw
  // sdr2udp_re 甄1�7 cam_to_udp_serializer 的1�7 fifo_re 驱动刄1�7 Sdr_rd_en
- wire camser_fifo_re;
+
  assign sdr2udp_re = camser_fifo_re;
  wire cam_sdr_read_req;
  assign cam_sdr_read_req = camser_fifo_re  ;
  assign clk_udp= udp_clk;
- wire [31:0] camser_word;
- wire        camser_word_valid;
- pulse_toggle_sync u_cam_req_sync (
-     .src_clk  (clk_udp),
-     .src_rst_n(rst_n_v2),
-     .src_pulse(cam_sdr_read_req),
-     .dst_clk  (mem_clk),           // frame_read_write 的1�7 mem_clk
-     .dst_rst_n(rst_n),
-     .dst_pulse()
- );
- cam_to_udp_serializer  t4(
-     .clk            (clk_udp),
-     .rst_n          (rst_n_v2),
-     .fifo_rd_usedw  (sdr2udp_rdusedw),
-     .fifo_dout      (sdr2udp_dout),
-     .fifo_re        (camser_fifo_re),
-     .cam_data       (camser_word),
-     .cam_data_valid (camser_word_valid)
- );
- // ========== 32-bit -> 8-bit 字节序列匄1�7 ==========
- wire [7:0] cam_byte;
- wire       cam_byte_valid;
- wire       cam_byte_last;
- 
- cam_word_to_bytes t5 (
-     .clk            (clk_udp),
-     .rst_n          (reset_n_udp),
-     .in_word        (camser_word),
-     .in_word_valid  (camser_word_valid),
-     .out_byte       (cam_byte),
-     .out_byte_valid (cam_byte_valid),
-     .out_word_last  (cam_byte_last)
- );
+
  // ========== 帧边畄1�7 / 帧长度（占位＄1�7 ==========
  // 说明：建议在写侧（像素域或写兄1�7 SDRAM 时）生成帧长度或 SOF/EOF 并跨域传递����1�7
  // 下面为简化计数����辑，需用真实跨域帧结束信号替换 cam_frame_end_pulse〄1�7
@@ -465,7 +438,7 @@ wire sel_cam;
 assign sel_cam = 1'b1;
  udp_source_mux u_udp_source_mux (
      .clk                (clk_udp),
-     .reset_n            (reset_n_udp ),
+     .reset_n            (rst_n_v2 ),
      .sel_cam            (sel_cam),
  
      .cam_data           (cam_byte),                 // from cam_word_to_bytes
@@ -483,8 +456,8 @@ assign sel_cam = 1'b1;
      .app_tx_data_length (app_tx_data_length_src),
      .app_tx_data_done   (app_tx_data_done_src)
  );
-always @(posedge clk_udp or negedge reset_n_udp) begin
-    if (!reset_n_udp) begin
+always @(posedge clk_udp or negedge rst_n_v2) begin
+    if (!rst_n_v2) begin
         cam_frame_len_r    <= 16'd0;
         cam_frame_done_r   <= 1'b0;
         cam_frame_len_count<= 16'd0;

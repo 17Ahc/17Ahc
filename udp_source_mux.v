@@ -2,19 +2,24 @@
 module udp_source_mux(
     input  wire         clk,
     input  wire         reset_n,
+    input               mem_clk,
+    input  wire        udp_clk,
     input wire sel_cam,
+    input                rst_n_v2,
     // 摄像头：8-bit bytes
     input  wire [7:0]   cam_data,
     input  wire         cam_data_valid,
     input  wire [15:0]  cam_data_length, // 字节长度
-    input  wire         cam_data_done,
-
+    input  wire         cam_data_done,    
+    input   wire [8:0] sdr2udp_rdusedw,   
+    input   wire [23:0] Sdr_rd_dout   ,  
+    input  wire  [11:0] udp_wrusedw,   
     // SD/TF：假定 24-bit 单位数据（如原工程）
     input  wire [23:0]  sd_data,
     input  wire         sd_data_valid,
     input  wire [15:0]  sd_data_length,  // 以 24-bit word 为单位或以字节（请按实际单位调整）
     input  wire         sd_data_done,
-
+    input               sys_rst_n_2,
     // 统一输出到 udp 发送模块（24-bit data）
     output reg  [23:0]  app_tx_data,
     output reg          app_tx_data_valid,
@@ -22,6 +27,13 @@ module udp_source_mux(
     output reg          app_tx_data_done
 );
 
+wire rst_n/* synthesis syn_keep=1 */;
+assign  rst_n = sys_rst_n_2 ;    
+ wire cam_sdr_read_req;
+ assign cam_sdr_read_req = camser_fifo_re  ;
+ wire  sdr2udp_re;
+ assign sdr2udp_dout    = {8'h00, Sdr_rd_dout};     // 24->32 拓宽
+ assign sdr2udp_rdusedw = udp_wrusedw[8:0];   
 // 内部：用于摄像头字节打包
 reg [1:0]  cam_byte_cnt;
 reg [23:0] cam_pack_buf;
@@ -30,11 +42,42 @@ reg [15:0] cam_len_bytes;  // remaining bytes to process
 reg        sd_valid_prev;
 reg [15:0] sd_word_cnt;
 reg        sd_end_req;
-
+ assign clk_udp= udp_clk;
 // 状emachine 简单控制（idle / send）
 localparam IDLE = 1'b0, SEND = 1'b1;
 reg state;
-
+ pulse_toggle_sync u_cam_req_sync (
+     .src_clk  (clk_udp),
+     .src_rst_n(rst_n_v2),
+     .src_pulse(cam_sdr_read_req),
+     .dst_clk  (mem_clk),           // frame_read_write 的1�7 mem_clk
+     .dst_rst_n(rst_n),
+     .dst_pulse()
+ );
+  cam_to_udp_serializer  t4(
+     .clk            (clk_udp),
+     .rst_n          (rst_n_v2),
+     .fifo_rd_usedw  (sdr2udp_rdusedw),
+     .fifo_dout      (sdr2udp_dout),
+     .fifo_re        (camser_fifo_re),
+     .cam_data       (camser_word),
+     .cam_data_valid (camser_word_valid)
+ );
+ // ========== 32-bit -> 8-bit 字节序列匄1�7 ==========
+ wire [7:0] cam_byte;
+ wire       cam_byte_valid;
+ wire       cam_byte_last;
+  wire [31:0] camser_word;
+ wire        camser_word_valid;
+ cam_word_to_bytes t5 (
+     .clk            (clk_udp),
+     .rst_n          (rst_n_v2),
+     .in_word        (camser_word),
+     .in_word_valid  (camser_word_valid),
+     .out_byte       (cam_byte),
+     .out_byte_valid (cam_byte_valid),
+     .out_word_last  (cam_byte_last)
+ );
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
         app_tx_data         <= 24'd0;

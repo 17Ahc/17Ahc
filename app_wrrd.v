@@ -50,7 +50,6 @@ assign wr_done_debug = wr_done;
 assign App_wr_dm =4'b0;
 reg [8:0] wr_fifo_cnt;//synthesis keep
 wire  [9:0] rdusedw;//synthesis keep
-wire  [23:0] sdr_rd_data;//synthesis keep
 reg wr_fifo_rd_en;//synthesis keep
 wire full_flag;//synthesis keep
 wire empty_flag;//synthesis keep
